@@ -128,6 +128,35 @@ func (t *Tailscale) WaitDirect(ctx context.Context, peer netip.Addr) (string, er
 	}
 }
 
+// TailscalePeerState is what the engine knows about a peer without sending
+// anything to it. Direct is only set while packets flow on a direct path.
+type TailscalePeerState struct {
+	Online   bool
+	LastSeen time.Time
+	Direct   string
+}
+
+// PeerStates lists the peers of the tailnet by node key.
+func (t *Tailscale) PeerStates(ctx context.Context) (map[string]TailscalePeerState, error) {
+	lc, err := t.server.LocalClient()
+	if err != nil {
+		return nil, err
+	}
+	status, err := lc.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+	states := make(map[string]TailscalePeerState, len(status.Peer))
+	for key, peer := range status.Peer {
+		states[key.String()] = TailscalePeerState{
+			Online:   peer.Online,
+			LastSeen: peer.LastSeen,
+			Direct:   peer.CurAddr,
+		}
+	}
+	return states, nil
+}
+
 // NodeKey returns this node's own public key once the engine runs.
 func (t *Tailscale) NodeKey(ctx context.Context) (string, error) {
 	lc, err := t.server.LocalClient()
