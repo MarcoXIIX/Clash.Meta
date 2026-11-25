@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/metacubex/tailscale/ipn"
 	"github.com/metacubex/tailscale/tailcfg"
 )
 
@@ -155,6 +156,21 @@ func (t *Tailscale) PeerStates(ctx context.Context) (map[string]TailscalePeerSta
 		}
 	}
 	return states, nil
+}
+
+// LoginNeeded reports that the engine has no identity the coordination
+// server accepts and no key that would get it one: its state was lost, or
+// its node was removed. Only a fresh auth key helps then.
+func (t *Tailscale) LoginNeeded(ctx context.Context) (bool, error) {
+	lc, err := t.server.LocalClient()
+	if err != nil {
+		return false, err
+	}
+	status, err := lc.Status(ctx)
+	if err != nil {
+		return false, err
+	}
+	return status.BackendState == ipn.NeedsLogin.String(), nil
 }
 
 // NodeKey returns this node's own public key once the engine runs.
