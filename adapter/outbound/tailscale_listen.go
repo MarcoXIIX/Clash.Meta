@@ -8,6 +8,9 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"time"
+
+	"github.com/metacubex/tailscale/tailcfg"
 )
 
 // TailscalePeer is the node behind a connection that Listen accepted, as the
@@ -88,6 +91,41 @@ func (t *Tailscale) PeerPath(ctx context.Context, nodeKey string) (direct string
 		}
 	}
 	return "", "", errors.New("peer not found")
+}
+
+// WaitDirect probes the peer at its tailnet address until packets reach it
+// without the relay, and returns the endpoint in use. The engine sends
+// through the relay while it is still looking for a direct path, so a caller
+// that must keep its payload off the relay waits here before it dials.
+func (t *Tailscale) WaitDirect(ctx context.Context, peer netip.Addr) (string, error) {
+	if err := t.ensureStarted(ctx); err != nil {
+		return "", err
+	}
+	lc, err := t.server.LocalClient()
+	if err != nil {
+		return "", err
+	}
+	var last error
+	for {
+		probe, cancel := context.WithTimeout(ctx, 5*time.Second)
+		result, err := lc.Ping(probe, peer, tailcfg.PingDisco)
+		cancel()
+		switch {
+		case err != nil:
+			last = err
+		case result.Err != "":
+			last = errors.New(result.Err)
+		case result.Endpoint != "":
+			return result.Endpoint, nil
+		default:
+			last = errors.New("peer is reached through the relay only")
+		}
+		select {
+		case <-ctx.Done():
+			return "", errors.Join(ctx.Err(), last)
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
 
 // NodeKey returns this node's own public key once the engine runs.
