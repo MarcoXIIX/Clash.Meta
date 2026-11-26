@@ -94,6 +94,11 @@ func (t *Tailscale) PeerPath(ctx context.Context, nodeKey string) (direct string
 	return "", "", errors.New("peer not found")
 }
 
+// ErrTailscaleRelayOnly is in what WaitDirect gives up with when the peer
+// answered at least once, but only through the relay. Without it in the
+// error the peer did not answer at all.
+var ErrTailscaleRelayOnly = errors.New("peer is reached through the relay only")
+
 // WaitDirect probes the peer at its tailnet address until packets reach it
 // without the relay, and returns the endpoint in use. The engine sends
 // through the relay while it is still looking for a direct path, so a caller
@@ -107,6 +112,7 @@ func (t *Tailscale) WaitDirect(ctx context.Context, peer netip.Addr) (string, er
 		return "", err
 	}
 	var last error
+	relayed := false
 	for {
 		probe, cancel := context.WithTimeout(ctx, 5*time.Second)
 		result, err := lc.Ping(probe, peer, tailcfg.PingDisco)
@@ -119,12 +125,46 @@ func (t *Tailscale) WaitDirect(ctx context.Context, peer netip.Addr) (string, er
 		case result.Endpoint != "":
 			return result.Endpoint, nil
 		default:
-			last = errors.New("peer is reached through the relay only")
+			relayed = true
+			last = ErrTailscaleRelayOnly
 		}
 		select {
 		case <-ctx.Done():
+			// The try the deadline cut off says nothing against an answer
+			// an earlier one got.
+			if relayed {
+				last = ErrTailscaleRelayOnly
+			}
 			return "", errors.Join(ctx.Err(), last)
 		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// WatchPeers calls changed whenever what PeerStates reports may differ from
+// before: a peer joined or left, went online or offline, or moved to other
+// addresses. The first call comes as soon as it watches, so that a caller
+// who reads PeerStates then misses nothing. It returns when ctx ends or the
+// engine stops reporting.
+func (t *Tailscale) WatchPeers(ctx context.Context, changed func()) error {
+	lc, err := t.server.LocalClient()
+	if err != nil {
+		return err
+	}
+	watcher, err := lc.WatchIPNBus(ctx, ipn.NotifyPeerChanges|ipn.NotifyPeerPatches)
+	if err != nil {
+		return err
+	}
+	defer watcher.Close()
+	changed()
+	for {
+		notify, err := watcher.Next()
+		if err != nil {
+			return err
+		}
+		if notify.State != nil || notify.NetMap != nil || notify.SelfChange != nil ||
+			notify.PeersChanged != nil || len(notify.PeersRemoved) > 0 || len(notify.PeerChangedPatch) > 0 {
+			changed()
 		}
 	}
 }
