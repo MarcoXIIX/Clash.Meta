@@ -114,7 +114,9 @@ func (t *Tailscale) WaitDirect(ctx context.Context, peer netip.Addr) (string, er
 	var last error
 	relayed := false
 	for {
-		probe, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// An answer takes a fraction of a second, also through the relay; a
+		// try that got none is not worth waiting out for long.
+		probe, cancel := context.WithTimeout(ctx, 2*time.Second)
 		result, err := lc.Ping(probe, peer, tailcfg.PingDisco)
 		cancel()
 		switch {
@@ -136,7 +138,7 @@ func (t *Tailscale) WaitDirect(ctx context.Context, peer netip.Addr) (string, er
 				last = ErrTailscaleRelayOnly
 			}
 			return "", errors.Join(ctx.Err(), last)
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(250 * time.Millisecond):
 		}
 	}
 }
